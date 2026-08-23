@@ -5,6 +5,7 @@ import time
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from scipy.optimize import minimize
 
 from config import CACHE_TTL_SECONDS, HISTORY_PERIOD, TICKERS
 
@@ -42,7 +43,13 @@ def _set_status(df: pd.DataFrame, stale: bool, error: str | None = None) -> None
 
 
 def fetch_price_data(force: bool = False) -> pd.DataFrame:
-    """Daily close prices for all configured tickers, one column per label.
+    """Total-return daily close prices for all configured tickers.
+
+    The fetch uses auto_adjust=True, which back-adjusts every close for
+    splits and dividends - so each column is a total return index and
+    pct_change() on it is the full daily total return (price + dividends
+    reinvested). All downstream return / covariance / correlation math
+    therefore operates on total returns, not price-only returns.
 
     Layered caching so the dashboard opens fast and survives flaky/no
     internet:
@@ -75,7 +82,8 @@ def fetch_price_data(force: bool = False) -> pd.DataFrame:
                 symbols,
                 period=HISTORY_PERIOD,
                 interval="1d",
-                auto_adjust=True,
+                auto_adjust=True,  # dividend/split-adjusted closes -> total return
+                actions=False,
                 progress=False,
                 group_by="ticker",
                 threads=True,
@@ -176,14 +184,21 @@ def compute_summary_returns(df: pd.DataFrame) -> pd.DataFrame:
 def compute_portfolio_series(df: pd.DataFrame, weights: dict) -> tuple[pd.Series, pd.Series]:
     """Daily portfolio return series + cumulative index (starts at 1.0).
 
-    Assumes weights are held constant (rebalanced daily) - the standard
-    simplification for an interactive "what if" allocator, as opposed to
-    a strict buy-and-hold drift simulation.
+    Assumes weights are held constant (rebalanced daily). Assets without
+    data on a given day (e.g. ETFs listed later than the window start -
+    the BMO SPDR sector suite only exists since Feb 2025) are excluded
+    that day and the remaining weights renormalised to 1, so the portfolio
+    stays fully invested instead of silently dragging a cash position
+    during an asset's listing gap.
     """
     rets = df.pct_change()
     w = pd.Series(weights, dtype=float).reindex(df.columns).fillna(0.0)
-    port_ret = (rets * w).sum(axis=1, min_count=1)
-    port_index = (1 + port_ret.fillna(0)).cumprod()
+    has_data = rets.notna() & w.gt(0)
+    w_effective = has_data.mul(w, axis=1).sum(axis=1)
+    raw = rets.mul(w, axis=1).sum(axis=1, min_count=1)
+    port_ret = raw / w_effective.where(w_effective > 0)
+    port_ret = port_ret.fillna(0.0)
+    port_index = (1 + port_ret).cumprod()
     return port_ret, port_index
 
 
@@ -208,3 +223,175 @@ def compute_correlation(df: pd.DataFrame, lookback: int) -> pd.DataFrame:
     """Pairwise correlation of daily returns over the trailing `lookback` days."""
     rets = df.pct_change().dropna(how="all").tail(lookback)
     return rets.corr()
+
+
+def compute_covariance(
+    df: pd.DataFrame,
+    lookback: int = 252,
+    halflife: float = 63,
+    annualized: bool = True,
+) -> pd.DataFrame:
+    """Covariance matrix of daily total returns with exponential decay.
+
+    RiskMetrics-style EWMA weighting: each observation's weight is
+    (1/2)^(age / halflife), where `age` counts trading days back from the
+    most recent one. Older returns matter less, so the estimate tracks
+    regime shifts faster than an equal-weighted covariance.
+
+    Estimation is pairwise: each (i, j) entry uses the observations where
+    both assets have returns, with weights renormalised on that subsample.
+    This keeps the matrix well-defined when assets have different listing
+    dates (e.g. the BMO SPDR sector ETFs launched Feb 2025) or an isolated
+    missing day.
+
+    Args:
+        df: price (total return index) DataFrame, one column per asset.
+        lookback: trailing window of daily returns to use.
+        halflife: decay half-life in trading days.
+        annualized: scale by 252 to get annualised covariances.
+
+    Returns:
+        DataFrame covariance matrix (asset order preserved).
+    """
+    rets = df.pct_change().dropna(how="all").tail(lookback)
+    labels = list(rets.columns)
+    x = rets.to_numpy(dtype=float)
+
+    age = np.arange(len(rets) - 1, -1, -1, dtype=float)
+    w_full = 0.5 ** (age / halflife)
+
+    k = len(labels)
+    valid = ~np.isnan(x)
+    cov = np.full((k, k), np.nan)
+    for j in range(k):
+        for l in range(j, k):
+            mask = valid[:, j] & valid[:, l]
+            if not mask.any():
+                continue
+            w = w_full[mask]
+            w /= w.sum()
+            a = x[mask, j]
+            b = x[mask, l]
+            ma = float(w @ a)
+            mb = float(w @ b)
+            cov[j, l] = cov[l, j] = float(w @ ((a - ma) * (b - mb)))
+
+    if annualized:
+        cov *= 252.0
+
+    return pd.DataFrame(cov, index=labels, columns=labels)
+
+
+def _solve_max_sharpe(
+    mu_vec: np.ndarray,
+    sigma: np.ndarray,
+    labels: list,
+    risk_free: float,
+) -> pd.Series:
+    """Long-only, fully-invested max-Sharpe weights for given mu / Sigma.
+
+    Falls back to inverse-variance weights if the solver does not converge.
+    """
+    n = len(labels)
+
+    def neg_sharpe(w: np.ndarray) -> float:
+        ret = float(w @ mu_vec)
+        vol = float(np.sqrt(max(w @ sigma @ w, 1e-12)))
+        return -(ret - risk_free) / vol
+
+    result = minimize(
+        neg_sharpe,
+        x0=np.full(n, 1.0 / n),
+        method="SLSQP",
+        bounds=[(0.0, 1.0)] * n,
+        constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1.0}],
+        options={"maxiter": 500, "ftol": 1e-9},
+    )
+
+    if result.success and np.isfinite(result.x).all():
+        weights = np.clip(result.x, 0.0, None)
+    else:
+        var = np.diag(sigma).copy()
+        weights = np.where(var > 0, 1.0 / var, 0.0)
+    weights /= weights.sum()
+
+    return pd.Series(weights, index=labels)
+
+
+def optimize_max_sharpe(
+    df: pd.DataFrame,
+    risk_free: float = 0.02,
+    lookback: int = 252,
+    halflife: float = 63,
+) -> pd.Series | None:
+    """Long-only max-Sharpe portfolio weights from trailing total returns.
+
+    Expected returns are the annualised mean of each asset's daily total
+    returns over the trailing `lookback` days (each asset uses whatever
+    history it has in that window). The covariance matrix is the
+    exponential-decay EWMA estimate from `compute_covariance`, which
+    handles the differing listing dates pairwise.
+    """
+    rets = df.pct_change().dropna(how="all").tail(lookback)
+    labels = list(rets.columns)
+    if len(labels) < 2 or len(rets) < 20:
+        return None
+
+    # Per-asset annualised expected return, ignoring missing observations.
+    mu = rets.mean() * 252.0
+    cov = compute_covariance(df, lookback=lookback, halflife=halflife)
+    sigma = cov.loc[labels, labels].to_numpy()
+
+    return _solve_max_sharpe(mu.loc[labels].to_numpy(), sigma, labels, risk_free)
+
+
+def compute_target_portfolio(
+    df: pd.DataFrame,
+    risk_free: float = 0.02,
+    est_months: int = 38,
+    skip_months: int = 2,
+    halflife: float = 126,
+) -> pd.Series | None:
+    """Target portfolio: max Sharpe on a rolling window that lags the present.
+
+    Estimation uses daily total returns from (T - `est_months` months) to
+    (T - `skip_months` months) - i.e. the most recent `skip_months` months
+    are excluded so the strategy is not fitted on the freshest noise.
+    Within the window every observation carries an exponential weight
+    (half-life `halflife` trading days, newest counts most): the weighted
+    mean feeds expected returns and the EWMA covariance (via
+    `compute_covariance`) feeds risk. The window rolls forward on every
+    refresh because it is always anchored to the latest available date.
+
+    Assets with too little history inside the window (<20 observations)
+    are dropped rather than optimised blind.
+    """
+    last = df.index[-1]
+    start = last - pd.DateOffset(months=est_months)
+    cutoff = last - pd.DateOffset(months=skip_months)
+    est = df[(df.index >= start) & (df.index <= cutoff)]
+    rets_all = est.pct_change().dropna(how="all")
+    if len(rets_all) < 20:
+        return None
+
+    labels = [c for c in rets_all.columns if rets_all[c].notna().sum() >= 20]
+    if len(labels) < 2:
+        return None
+    rets = rets_all[labels]
+
+    age = np.arange(len(rets) - 1, -1, -1, dtype=float)
+    w_obs = 0.5 ** (age / halflife)
+
+    x = rets.to_numpy(dtype=float)
+    valid = ~np.isnan(x)
+    mass = valid.T @ w_obs
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mu_daily = np.where(mass > 0, np.nan_to_num(x).T @ w_obs / np.where(mass > 0, mass, 1.0), 0.0)
+    mu = mu_daily * 252.0
+
+    cov = compute_covariance(est, lookback=len(est) + 1, halflife=halflife)
+    sigma = cov.loc[labels, labels].to_numpy()
+    if not np.isfinite(sigma).all():
+        sigma = np.nan_to_num(sigma, nan=0.0)
+
+    return _solve_max_sharpe(mu, sigma, labels, risk_free)

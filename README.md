@@ -1,21 +1,33 @@
 # ETF_Allocator
 
-A Dash dashboard for an ETF asset-allocation portfolio (CAD base currency):
-ZSP, XIU, ZEB, HFIN, BANK, XEC, XCS.
+A Dash dashboard for a CAD-based asset-allocation portfolio built from the
+**BMO SPDR Select Sector Index ETFs** (all 11 GICS sectors of the S&P 500,
+listed on the TSX) plus broad **global coverage** ETFs:
+
+- US Sectors: ZXLE (Energy), ZXLF (Financials), ZXLV (Health Care), ZXLK
+  (Technology), ZXLU (Utilities), ZXLI (Industrials), ZXLB (Materials),
+  ZXLC (Communication Services), ZXLY (Cons. Discretionary), ZXLP
+  (Cons. Staples), ZXLR (Real Estate)
+- Global: ZCN (Canada), ZSP (US S&P 500), ZEA (MSCI EAFE), ZEM (MSCI EM)
 
 Single page, no tabs:
 - **ETF / Index Returns** — last close, daily / MTD / QTD % return per ETF.
+  All returns are computed on **total return series** (dividends reinvested,
+  via Yahoo's adjusted closes).
 - **Portfolio Weights** — enter a weight (%) per ETF via a number box or its
-  slider (kept in sync). Click the 📌 next to a ticker to **pin** it — the
-  "Equal Weight (unpinned)" button then only redistributes 100% minus the
-  pinned total evenly across the *unpinned* tickers, leaving pinned weights
-  untouched.
-- **Portfolio Return** — the resulting portfolio's daily / MTD / QTD return
-  (each with its delta vs the ZSP benchmark) and a cumulative return chart
-  with a ZSP benchmark line overlaid. Change the benchmark via
-  `BENCHMARK_TICKER` in `config.py`.
-- **Correlation Matrix** — heatmap of pairwise daily-return correlation over
-  a selectable lookback window (20–252 trading days).
+  slider (kept in sync), grouped by US sectors vs global coverage. Click the
+  📌 next to a ticker to **pin** it — the "Equal Weight (unpinned)" button
+  then only redistributes 100% minus the pinned total evenly across the
+  *unpinned* tickers.
+- **Portfolio Return** — daily / MTD / QTD return of the weighted portfolio
+  (each with its delta vs the `BENCHMARK_TICKER`) and a cumulative return
+  chart with a benchmark line overlaid.
+- **Risk Matrix** — toggle between:
+  - *Correlation*: pairwise correlation of daily returns over a selectable
+    lookback window (20–252 trading days).
+  - *Covariance*: annualised covariance estimated with **exponential decay**
+    (RiskMetrics-style EWMA, configurable half-life) — see
+    `compute_covariance` in `data_utils.py`.
 
 Data comes from Yahoo Finance via `yfinance` (free tier — end-of-day data,
 plus whatever intraday last-price Yahoo happens to expose; not a paid
@@ -32,7 +44,8 @@ flaky/no internet:
   old. If a live fetch ever fails (e.g. no internet), the dashboard falls
   back to this file no matter how stale, and the status pill in the header
   turns red and says "Showing cached data as of ...".
-- Delete `cache/price_data.pkl` any time to force a clean re-fetch.
+- Delete `cache/price_data.pkl` any time to force a clean re-fetch (you must
+  do this once after changing the ticker list in `config.py`).
 
 ## Setup
 
@@ -57,10 +70,9 @@ flaky/no internet:
 4. Open http://127.0.0.1:8050 in your browser.
 
 ## Notes / things to check after first run
-- `config.py` maps each display label to its Yahoo Finance symbol; all
-  current tickers use the `.TO` (TSX) suffix. If the correlation matrix or
-  portfolio chart looks off for one ETF, double check its symbol resolves
-  on [finance.yahoo.com](https://finance.yahoo.com) and adjust `config.py`.
+- The BMO SPDR sector ETFs launched in Feb 2025, so their price history
+  starts there; lookback windows reaching before that simply use whatever
+  data exists.
 - Portfolio return math assumes weights are held constant (i.e. rebalanced
   daily) rather than simulating buy-and-hold drift — the standard
   simplification for an interactive "what-if" allocator.
