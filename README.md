@@ -3,7 +3,9 @@
 A Dash dashboard for an ETF asset-allocation portfolio (CAD base currency):
 ZSP, XIU, ZEB, HFIN, BANK, XEC, XCS.
 
-Single page, no tabs:
+Two pages, switched from the header (Allocator / Attribution):
+
+### Allocator (`/`)
 - **ETF / Index Returns** — last close, daily / MTD / QTD % return per ETF.
 - **Portfolio Weights** — enter a weight (%) per ETF via a number box or its
   slider (kept in sync). Click the 📌 next to a ticker to **pin** it — the
@@ -16,6 +18,40 @@ Single page, no tabs:
   `BENCHMARK_TICKER` in `config.py`.
 - **Correlation Matrix** — heatmap of pairwise daily-return correlation over
   a selectable lookback window (20–252 trading days).
+
+### Attribution (`/attribution`)
+
+Brinson-Fachler attribution (allocation / selection / interaction) vs a 70/30
+benchmark, in CAD. Three parts, each usable on its own:
+
+- **`attribution/brinson.py` — the calculation.** No data loading. Give it
+  any portfolio and benchmark and it returns an `Attribution`:
+
+  ```python
+  from attribution import attribute
+
+  att = attribute(
+      weights,        # dates x assets, target weights (e.g. month-end); applied from the next day
+      returns,        # dates x assets, daily returns
+      segments,       # {"ZXLK": "Equity", "XCB": "Fixed Income", "Cash": "Cash", ...}
+      bench_weights,  # {"Equity": 0.7, "Fixed Income": 0.3}
+      bench_returns,  # dates x segments, daily returns
+  )
+  s = att.summary("2025-01-01", "2025-12-31")  # total, segments, assets, cumulative, periods
+  ```
+
+  Daily effects are linked with Carino smoothing, so over any window they
+  sum exactly to the compounded active return.
+- **`attribution/portfolios.py` — the inputs.** The benchmark (70% S&P 500 as
+  SPY × USDCAD + 30% FTSE Canada Universe Bond via XBB.TO) and the portfolios
+  to attribute: the full strategy (`port_con.portfolio.final_weights`, L1 × L2)
+  and L1 only (equal weight inside each basket). Leftover weight (L1
+  leverage) is cash at the 3M T-bill. `attribute_vs_benchmark(weights, name)`
+  attributes any month-end ETF weights against this benchmark.
+- **`attribution/page.py` — the display.** Shows every entry in
+  `PORTFOLIOS` (a dropdown picks one). To show a new portfolio, add a
+  function returning an `Attribution` to `PORTFOLIOS`. Results are cached for
+  6 hours.
 
 Data comes from Yahoo Finance via `yfinance` (free tier — end-of-day data,
 plus whatever intraday last-price Yahoo happens to expose; not a paid

@@ -110,7 +110,8 @@ body {
 .weight-label {
   font-weight: 600;
   color: var(--text-primary);
-  width: 34px;
+  width: 44px;
+  white-space: nowrap;
   font-size: 0.82rem;
   flex: 0 0 auto;
 }
@@ -327,4 +328,113 @@ body {
 
 #returns-table .dash-spreadsheet-container .dash-spreadsheet-inner table {
   border-collapse: collapse;
+}
+
+/* Period preset buttons (attribution dashboard) */
+.period-btns .btn-outline-secondary {
+  color: var(--text-muted);
+  border-color: var(--hairline);
+  margin-right: 4px;
+  border-radius: 8px !important;
+}
+
+.period-btns .btn-outline-secondary:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.25);
+  background: transparent;
+}
+
+.period-btns .btn-outline-secondary.active {
+  color: #ffffff;
+  background: var(--brand-blue);
+  border-color: var(--brand-blue);
+}
+
+/* Page switcher in the header */
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.page-nav {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.page-nav .page-link {
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.page-nav .page-link:hover {
+  color: #ffffff;
+}
+
+.page-nav .page-link.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+/* Dash 4 dropdowns (the .Select-* rules above are for the pre-4 dropdown) */
+.dash-dropdown {
+  background-color: var(--card-bg-alt) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--hairline) !important;
+  border-radius: 8px !important;
+}
+
+.dash-dropdown-content {
+  background-color: var(--card-bg-alt) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--hairline) !important;
+}
+
+.dash-dropdown-content input {
+  background-color: var(--card-bg) !important;
+  color: var(--text-primary) !important;
+}
+
+.dash-dropdown-option:hover,
+.dash-dropdown-option.selected {
+  background-color: rgba(44, 111, 201, 0.35) !important;
+}
+
+.dash-dropdown-option,
+.dash-dropdown-option * {
+  color: var(--text-primary) !important;
+}
+
+/* Date pickers: dark field to match the cards (the default is white, with the
+   light app text on top it was unreadable). */
+.dash-datepicker {
+  background-color: var(--card-bg-alt) !important;
+  border: 1px solid var(--hairline) !important;
+  border-radius: 8px;
+}
+.dash-datepicker-input {
+  color: var(--text-primary) !important;
+}
+.dash-datepicker-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Page tabs (Portfolio Backtest). */
+.nav-tabs {
+  border-bottom-color: var(--hairline);
+}
+.nav-tabs .nav-link {
+  color: var(--text-muted);
+}
+.nav-tabs .nav-link.active {
+  color: var(--text-primary);
+  background-color: var(--card-bg);
+  border-color: var(--hairline) var(--hairline) var(--card-bg);
 }

@@ -24,7 +24,8 @@ def _load_disk_cache() -> pd.DataFrame | None:
         return None
     try:
         df = pd.read_pickle(_CACHE_FILE)
-        return df if not df.empty else None
+        # A cache written for a different ticker list is useless.
+        return df if not df.empty and set(df.columns) == set(TICKERS) else None
     except Exception:
         return None
 
